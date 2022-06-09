@@ -1,0 +1,27 @@
+defaultImage:
+defaultImagePullPolicy:
+
+envs:
+  CELERY_BROKER:
+  POSTGRES_USER:
+  POSTGRES_DB:
+  POSTGRES_PORT:
+
+secretEnvs:
+  POSTGRES_PASSWORD:
+
+configMaps:
+
+deployments:
+  web-app:
+    extraSelectorLabels:
+
+  celery-worker:
+
+  celery-dash:
+
+hooks:
+
+services:
+
+ingresses:

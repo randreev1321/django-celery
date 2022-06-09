@@ -1,0 +1,4 @@
+architecture: standalone
+auth:
+  database: demo
+  postgresPassword: oIa1B5GmCz

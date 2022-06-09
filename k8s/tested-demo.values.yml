@@ -1,0 +1,148 @@
+defaultImage: randreev/django-celery
+defaultImagePullPolicy: Always
+
+envs:
+  POSTGRES_USER: postgres
+  POSTGRES_DB: demo
+  POSTGRES_PORT: 5432
+  CELERY_BROKER: redis://redis-master:6379/0
+
+secretEnvs:
+  POSTGRES_PASSWORD: b64:b0lhMUI1R21Deg==
+
+configMaps:
+  nginx-conf:
+    data:
+      nginx.conf: |
+        server {
+          listen 80 default_server;
+
+          location / {
+            proxy_pass http://localhost:8000;
+            proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+            proxy_set_header Host $host;
+            proxy_redirect off;
+          }
+
+          location /staticfiles/ {
+            autoindex on;
+            alias /var/www/app/staticfiles/;
+          }
+        }
+
+deployments:
+  web-app:
+    extraSelectorLabels:
+      tier: web
+    initContainers:
+    - name: collectstatic
+      command:
+      - python
+      args:
+      - manage.py
+      - collectstatic
+      - --no-input
+      volumeMounts:
+      - mountPath: /usr/src/app/staticfiles
+        name: staticfiles
+    containers:
+    - name: django
+      envSecrets:
+      - secret-envs
+      envConfigmaps:
+      - envs
+    - name: nginx
+      image: nginx
+      imageTag: alpine
+      volumeMounts:
+      - mountPath: /etc/nginx/conf.d/default.conf
+        name: nginx-conf
+        subPath: default.conf
+      - mountPath: /var/www/app/staticfiles
+        name: staticfiles
+    volumes:
+    - name: nginx-conf
+      type: configMap
+      items:
+      - key: nginx.conf
+        path: default.conf
+    extraVolumes:
+    - name: staticfiles
+      emptyDir: {}
+
+  celery-worker:
+    extraSelectorLabels:
+      tier: worker
+    replicas: 2
+    containers:
+    - name: worker
+      command:
+      - celery
+      args: ["worker", "--app=core", "--loglevel=info"]
+      envSecrets:
+      - secret-envs
+      envConfigmaps:
+      - envs
+
+  celery-dash:
+    extraSelectorLabels:
+      tier: dashboard
+    containers:
+    - name: flower
+      command:
+      - flower
+      args:
+      - -A
+      - core
+      - --port=5555
+      - '--broker=$(CELERY_BROKER)'
+      - --url_prefix=flower
+      envsFromConfigmap:
+        envs:
+        - CELERY_BROKER: CELERY_BROKER
+
+hooks:
+  db-migrate:
+    containers:
+    - name: migrate
+      command:
+      - python
+      args:
+      - manage.py
+      - migrate
+      envSecrets:
+      - secret-envs
+      envConfigmaps:
+      - envs
+
+services:
+  web:
+    ports:
+    - name: http
+      protocol: TCP
+      port: 80
+    extraSelectorLabels:
+      tier: web
+  dash:
+    ports:
+    - name: http
+      protocol: TCP
+      port: 5555
+    extraSelectorLabels:
+      tier: dashboard
+
+ingresses:
+  dc2022.nixys.ru:
+    ingressClassName: nginx
+    annotations:
+      nginx.ingress.kubernetes.io/ssl-redirect: "true"
+    certManager:
+      issuerType: cluster-issuer
+      issuerName: letsencrypt-prod
+    hosts:
+    - paths:
+      - serviceName: web
+        servicePort: http
+      - path: /flower
+        serviceName: dash
+        servicePort: http

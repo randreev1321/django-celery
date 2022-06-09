@@ -1,0 +1,228 @@
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: nginx-conf
+data:
+  default.conf: |
+    server {
+      listen 80 default_server;
+
+      location / {
+        proxy_pass http://localhost:8000;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header Host $host;
+        proxy_redirect off;
+      }
+
+      location /staticfiles/ {
+        autoindex on;
+        alias /var/www/app/staticfiles/;
+      }
+    }
+---
+kind: ConfigMap
+apiVersion: v1
+metadata:
+  name: envs
+data:
+  CELERY_BROKER: redis://redis-master:6379/0
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: psql-creds
+data:
+  POSTGRES_PASSWORD: b0lhMUI1R21Deg==
+  POSTGRES_USER: cG9zdGdyZXM=
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: django-celery
+spec:
+  selector:
+    matchLabels:
+      app: demo
+      tier: web
+  replicas: 1
+  template:
+    metadata:
+      labels:
+        app: demo
+        tier: web
+    spec:
+      initContainers:
+      - name: migrate
+        image: randreev/django-celery
+        imagePullPolicy: Always
+        command:
+        - python
+        args:
+        - manage.py
+        - migrate
+        envFrom:
+        - secretRef:
+            name: psql-creds
+      - name: collectstatic
+        image: randreev/django-celery
+        imagePullPolicy: Always
+        command:
+        - python
+        args:
+        - manage.py
+        - collectstatic
+        - --no-input
+        volumeMounts:
+        - mountPath: /usr/src/app/staticfiles
+          name: staticfiles
+      containers:
+      - name: nginx
+        image: nginx:alpine
+        volumeMounts:
+        - mountPath: /etc/nginx/conf.d/default.conf
+          name: nginx-conf
+          subPath: default.conf
+        - mountPath: /var/www/app/staticfiles
+          name: staticfiles
+      - name: django
+        image: randreev/django-celery
+        imagePullPolicy: Always
+        envFrom:
+        - secretRef:
+            name: psql-creds
+        - configMapRef:
+            name: envs
+      volumes:
+      - name: staticfiles
+        emptyDir: {}
+      - name: nginx-conf
+        configMap:
+          name: nginx-conf
+          items:
+          - key: default.conf
+            path: default.conf
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: celery-worker
+spec:
+  selector:
+    matchLabels:
+      app: demo
+      tier: worker
+  replicas: 2
+  template:
+    metadata:
+      labels:
+        app: demo
+        tier: worker
+    spec:
+      containers:
+      - name: django
+        image: randreev/django-celery
+        imagePullPolicy: Always
+        command:
+        - celery
+        args: ["worker", "--app=core", "--loglevel=info"]
+        envFrom:
+        - secretRef:
+            name: psql-creds
+        - configMapRef:
+            name: envs
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: flower-dash
+spec:
+  selector:
+    matchLabels:
+      app: demo
+      tier: dashboard
+  replicas: 1
+  template:
+    metadata:
+      labels:
+        app: demo
+        tier: dashboard
+    spec:
+      containers:
+      - name: flower-dash
+        image: randreev/django-celery
+        imagePullPolicy: Always
+        envFrom:
+          - configMapRef:
+              name: envs
+        command:
+        - flower
+        args:
+        - -A
+        - core
+        - --port=5555
+        - '--broker=$(CELERY_BROKER)'
+        - --url_prefix=flower
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: demo-web
+  labels:
+    app: demo
+    tier: web
+spec:
+  type: ClusterIP
+  ports:
+  - port: 80
+  selector:
+    app: demo
+    tier: web
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: demo-dash
+  labels:
+    app: demo
+    tier: dashboard
+spec:
+  type: ClusterIP
+  ports:
+  - port: 5555
+  selector:
+    app: demo
+    tier: dashboard
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: demo
+  labels:
+    app: demo
+  annotations:
+    cert-manager.io/cluster-issuer: "letsencrypt-prod"
+spec:
+  ingressClassName: nginx
+  rules:
+  - host: dc2022.nixys.ru
+    http:
+      paths:
+      - backend:
+          service:
+            name: demo-web
+            port:
+              number: 80
+        pathType: Prefix
+        path: /
+      - backend:
+          service:
+            name: demo-dash
+            port:
+              number: 5555
+        pathType: Prefix
+        path: /flower
+  tls:
+  - hosts:
+    - dc2022.nixys.ru
+    secretName: dc2022.nixys.ru-tls

@@ -1,52 +1,51 @@
-version: '3.8'
+version: '3.4'
 
 services:
-  web:
-    build: ./project
-    command: python manage.py runserver 0.0.0.0:8000
-    volumes:
-      - ./project:/usr/src/app/
+  nginx:
+    image: nginx:alpine
+    command: nginx -g "daemon off;"
     ports:
-      - 1337:8000
-    environment:
-      - DEBUG=1
-      - SECRET_KEY=dbaa1_i7%*3r9-=z-+_mz4r-!qeed@(-a_r(g@k8jo8y3r27%m
-      - DJANGO_ALLOWED_HOSTS=localhost 127.0.0.1 [::1]
-      - CELERY_BROKER=redis://redis:6379/0
-      - CELERY_BACKEND=redis://redis:6379/0
+    - "80:80"
     depends_on:
-      - redis
+    - django
+    volumes:
+    - staticfiles:/var/www/app/staticfiles
+    - ./project/nginx.conf:/etc/nginx/conf.d/default.conf
+
+  django:
+    build: ./project
+    command: gunicorn core.wsgi -b 0:8000 --log-level debug --capture-output
+    volumes:
+    - staticfiles:/usr/src/app/staticfiles
+    environment:
+    - DEBUG=1
+    ports:
+    - "8000:8000"
+    depends_on:
+    - redis
 
   celery:
     build: ./project
-    command: celery worker --app=core --loglevel=info --logfile=logs/celery.log
-    volumes:
-      - ./project:/usr/src/app
-    environment:
-      - DEBUG=1
-      - SECRET_KEY=dbaa1_i7%*3r9-=z-+_mz4r-!qeed@(-a_r(g@k8jo8y3r27%m
-      - DJANGO_ALLOWED_HOSTS=localhost 127.0.0.1 [::1]
-      - CELERY_BROKER=redis://redis:6379/0
-      - CELERY_BACKEND=redis://redis:6379/0
+    entrypoint: celery
+    command: ["worker", "--app=core", "--loglevel=info"]
     depends_on:
-      - web
-      - redis
+    - django
+    - redis
 
   redis:
     image: redis:6-alpine
 
   dashboard:
     build: ./project
-    command:  flower -A core --port=5555 --broker=redis://redis:6379/0
+    command: flower -A core --port=5555 --broker=redis://redis:6379/0
     ports:
-      - 5555:5555
+    - "5555:5555"
     environment:
-      - DEBUG=1
-      - SECRET_KEY=dbaa1_i7%*3r9-=z-+_mz4r-!qeed@(-a_r(g@k8jo8y3r27%m
-      - DJANGO_ALLOWED_HOSTS=localhost 127.0.0.1 [::1]
-      - CELERY_BROKER=redis://redis:6379/0
-      - CELERY_BACKEND=redis://redis:6379/0
+    - DEBUG=1
     depends_on:
-      - web
-      - redis
-      - celery
+    - django
+    - redis
+    - celery
+
+volumes:
+  staticfiles:
